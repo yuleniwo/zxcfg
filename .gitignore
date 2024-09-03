@@ -1,0 +1,8 @@
+*.ncb
+*.suo
+*.user
+*_bin
+*_obj
+/vc*
+/mingw
+
