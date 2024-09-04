@@ -409,13 +409,14 @@ tb_int32 decrypt_xml(zxcfg_t* zc, FILE* fpr, const char* tmpfile, FILE** fpout)
 				if(GET_U32(po) == XML_HDR_MAGIC && GET_U32(po + 4) == 0)
 					fwrite(po, ebh.plain_len, 1, fpw);
 				else
-					goto lbl_exit;
+					goto lbl_err_msg;
 			}
 			else
 				fwrite(po, ebh.plain_len, 1, fpw);
 		}
 		else
 		{
+lbl_err_msg:
 			fprintf(stderr, "Decrypt error!\nPlease use the \"-k\" option and "
 				"try a different key.\n");
 			goto lbl_exit;
