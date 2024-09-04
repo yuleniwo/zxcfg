@@ -147,6 +147,8 @@ void usage(const char* app)
 		"  -l  byte order.(only used to pack into cfg. default: 0)\n"
 		"      0 --- big endian\n"
 		"      1 --- little endian\n"
+		"  -c  cfg type (only used to pack into cfg. default: 2)\n"
+		"  -d  defcfg type (only used to pack into cfg. default: 0)\n"
 		"\n", app);
 }
 
@@ -244,6 +246,14 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 
 		case 'l':
 			zc->bo_le = '0' != argv[++i][0];
+			break;
+
+		case 'c':
+			zc->cfgtype = (tb_uint16)atoi(argv[++i]);
+			break;
+
+		case 'd':
+			zc->defcfgtype = (tb_uint16)atoi(argv[++i]);
 			break;
 		}
 	}
