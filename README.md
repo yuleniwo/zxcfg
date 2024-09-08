@@ -10,6 +10,7 @@ Options:
       0 --- unpack cfg or xml file (default mode)
       1 --- pack into xml file
       2 --- pack into cfg file
+      3 --- unpack hardcode file(/etc/hardcodefile/)
   -t  pack type (pack mode only)
       0 --- compress
       1 --- compress, encrypt with default key

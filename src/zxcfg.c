@@ -11,7 +11,7 @@
 #include "tb_crc32.h"
 #include "../deps/zlib/zutil.h"
 
-#define ZXCFG_VER	"1.0"
+#define ZXCFG_VER	"1.1"
 
 #define DEF_KEY		"PON_Dkey"
 #define DEF_IV		"PON_DIV"
@@ -25,6 +25,9 @@
 #define CFG_MODEL_MAGIC		0x04030201
 #define XML_HDR_MAGIC		0x01020304	// Big-Endian
 #define SPLIT_BLK_SIZE		0x10000
+
+// /etc/hardcode
+#define HC_KEY	"09a01cee5518b341f40d83f1cc5e7c2ac3631ee2fd87c3b85b6b586194cc5486F70xx_5p4"
 
 #define GET_U32(p) (((p)[0] << 24) | ((p)[1] << 16) | ((p)[2] << 8) | ((p)[3]))
 #ifndef min
@@ -106,6 +109,7 @@ typedef struct
 {
 	const char* file_in;
 	const char* file_out;
+	const char* key_arg;			// hardcode key
 	FILE* fp_in;
 	char key[36];
 	char iv[36];
@@ -113,11 +117,12 @@ typedef struct
 	tb_uint8 aes_iv[16];
 	tb_uint16 cfgtype;
 	tb_uint16 defcfgtype;
-	tb_uint8 model_name[260];	// model_name[0] is len
+	tb_uint8 model_name[260];		// model_name[0] is len
 	tb_uint8 mode;
 	tb_uint8 pack_type;
 	tb_uint8 key_method;
-	tb_bool bo_le;				// is byte-order little-endian
+	tb_bool bo_le;					// is byte-order little-endian
+	tb_bool iv_input;				// specify iv manually
 } zxcfg_t;
 
 void usage(const char* app)
@@ -133,6 +138,7 @@ void usage(const char* app)
 		"      0 --- unpack cfg or xml file (default mode)\n"
 		"      1 --- pack into xml file\n"
 		"      2 --- pack into cfg file\n"
+		"      3 --- unpack hardcode file(/etc/hardcodefile/)\n"
 		"  -t  pack type (pack mode only)\n"
 		"      0 --- compress\n"
 		"      1 --- compress, encrypt with default key\n"
@@ -179,7 +185,7 @@ tb_uint32 h2nl(tb_uint32 n)
 int proc_args(zxcfg_t* zc, int argc, char* argv[])
 {
 	int i, ret = -1;
-	tb_bool k = tb_false, m = tb_false;
+	tb_bool m = tb_false;
 
 	if(argc <= 1)
 	{
@@ -204,7 +210,7 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 
 		case 'm':
 			zc->mode = (tb_uint8)atoi(argv[++i]);
-			if(zc->mode > 2)
+			if(zc->mode > 3)
 			{
 				printf("Invalid mode: %u !!!\n", zc->mode);
 				goto lbl_exit;
@@ -222,11 +228,12 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 
 		case 'k':
 			sprintf(zc->key, "%.32s", argv[++i]);
-			k = tb_true;
+			zc->key_arg = argv[i];
 			break;
 
 		case 'v':
 			sprintf(zc->iv, "%.32s", argv[++i]);
+			zc->iv_input = tb_true;
 			break;
 
 		case 'g':
@@ -271,7 +278,7 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 		goto lbl_exit;
 	}
 
-	if(k && !m)
+	if(zc->key_arg != NULL && !m)
 		zc->key_method = 1;
 
 	if(2 == zc->mode && 0 == zc->model_name[0])
@@ -320,10 +327,10 @@ void gen_key_iv(zxcfg_t* zc, tb_uint32 ver)
 	tb_uint8 key[32], iv[32];
 	tb_int32 l;
 
-	if('\0' == zc->key[0])
+	if(NULL == zc->key_arg)
 		sprintf(zc->key, "%.32s", 4 == ver ? USER_KEY : DEF_KEY);
 
-	if('\0' == zc->iv[0])
+	if(!zc->iv_input)
 		sprintf(zc->iv, "%.32s", 4 == ver ? USER_IV : DEF_IV);
 
 	if(1 != zc->key_method)
@@ -693,6 +700,7 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 		goto lbl_exit;
 	}
 
+	tmpname[FILENAME_MAX - 1] = '\0';
 	printf("Xml db ver: %u\n", ver);
 	switch(ver)
 	{
@@ -707,7 +715,7 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 		break;
 
 	case 2: // copy content & uncompress
-		snprintf(tmpname, FILENAME_MAX, "%s.unc", zc->file_out);
+		snprintf(tmpname, FILENAME_MAX - 1, "%s.unc", zc->file_out);
 		ret = cp_content(zc, zc->fp_in, tmpname, &fptmp);
 		if(0 == ret)
 		{
@@ -726,7 +734,7 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 	//case 3: // decrypt with default key & uncompress
 	//case 4: // decrypt with user key & uncompress
 	default:
-		snprintf(tmpname, FILENAME_MAX, "%s.dec", zc->file_out);
+		snprintf(tmpname, FILENAME_MAX - 1, "%s.dec", zc->file_out);
 		gen_key_iv(zc, ver);
 		printf("Use key: %s\n", zc->key);
 		printf("Use iv: %s\n", zc->iv);
@@ -1129,7 +1137,8 @@ tb_int32 pack(zxcfg_t* zc, tb_bool is_cfg)
 		printf("Generate key method: %s\n", 
 			zc->key_method ? "md5, sha256" : "sha256");
 
-		snprintf(tmpfile, FILENAME_MAX, "%s.cpr", zc->file_out);
+		tmpfile[FILENAME_MAX - 1] = '\0';
+		snprintf(tmpfile, FILENAME_MAX - 1, "%s.cpr", zc->file_out);
 		ret = compress_xml(zc, tmpfile, &fptmp, 0);
 		if(0 == ret)
 		{
@@ -1178,6 +1187,133 @@ tb_int32 pack(zxcfg_t* zc, tb_bool is_cfg)
 	return ret;
 }
 
+tb_int32 decrypt_hc(zxcfg_t* zc)
+{
+	tb_uint8 *pi = NULL, *po = NULL;
+	FILE* fpw = stdout;
+	encrypt_hdr_t eh;
+	encrypt_blk_hdr_t ebh;
+	tb_uint32 rl;
+	tb_int32 ret = -1;
+
+	if('-' != zc->file_out[0] || '\0' != zc->file_out[1])
+	{
+		fpw = fopen(zc->file_out, "wb");
+		if(NULL == fpw)
+		{
+			fprintf(stderr, "Can not open file: %s\n", zc->file_out);
+			goto lbl_exit;
+		}
+	}
+
+	rl = (tb_uint32)fread(&eh, 1, sizeof(eh), zc->fp_in);
+	if(rl != (tb_uint32)sizeof(eh))
+	{
+		fprintf(stderr, "Read encrypt header error!\n");
+		goto lbl_exit;
+	}
+
+	if(h2nl(eh.magic) != XML_HDR_MAGIC)
+	{
+		fprintf(stderr, "Invalid encrypt header magic!\n");
+		goto lbl_exit;
+	}
+
+	rl = (tb_uint32)fread(&ebh, 1, sizeof(ebh), zc->fp_in);
+	if(rl != (tb_uint32)sizeof(ebh))
+	{
+		fprintf(stderr, "Read encrypt block header error!\n");
+		goto lbl_exit;
+	}
+
+	ebh.cipher_len = h2nl(ebh.cipher_len);
+	ebh.plain_len = h2nl(ebh.plain_len);
+
+	if(ebh.plain_len > ebh.cipher_len)
+	{
+		fprintf(stderr, "Invalid encrypt block header!\n");
+		goto lbl_exit;
+	}
+
+	pi = (tb_uint8*)malloc(ebh.cipher_len);
+	po = (tb_uint8*)malloc(ebh.cipher_len);
+	if(NULL == pi || NULL == po)
+	{
+		fprintf(stderr, "Alloc memory err! len: %u\n", ebh.cipher_len);
+		goto lbl_exit;
+	}
+
+	rl = (tb_uint32)fread(pi, 1, ebh.cipher_len, zc->fp_in);
+	if(rl != ebh.cipher_len)
+	{
+		fprintf(stderr, "Read encrypt block error!\n");
+		goto lbl_exit;
+	}
+
+	po[0] = '\0';
+	if(tb_aes_decrypt_cbc(pi, ebh.cipher_len, po,
+		zc->aes_key_ext, 256, zc->aes_iv) == 0 &&
+		(rl = (tb_uint32)strlen((char *)po)) == ebh.plain_len)
+	{
+		fwrite(po, ebh.plain_len, 1, fpw);
+		ret = 0;
+		printf("Decrypt ok!\n");
+	}
+	else
+		printf("Decrypt error! plain_len:%u, strlen(po):%u\n",
+			ebh.plain_len, rl);
+
+lbl_exit:
+	if(fpw != NULL && fpw != stdout)
+	{
+		fclose(fpw);
+
+		if(ret != 0)
+			unlink(zc->file_out);
+	}
+
+	free(pi);
+	free(po);
+
+	return ret;
+}
+
+tb_int32 unpack_hardcode(zxcfg_t* zc)
+{
+	tb_uint32 kl;
+	tb_uint8 key[32], iv[32];
+	tb_int32 i, ret = -1;
+
+	if(NULL == zc->key_arg)
+		zc->key_arg = HC_KEY;
+
+	kl = (tb_uint32)strlen(zc->key_arg);
+	if(kl < 65)
+	{
+		fprintf(stderr, "Invalid hardcode key!\n");
+		goto lbl_exit;
+	}
+
+	for(i=0; i<32; i++)
+		zc->iv[i] = zc->key_arg[22 + i] + 1;
+
+	for(i=0; i<16; i++)
+		zc->key[i] = zc->key_arg[18 + i] + 3;
+
+	kl -= 64;
+	i = min(kl, sizeof(zc->key) - 17);
+	memcpy(&zc->key[16], &zc->key_arg[64], i);
+
+	tb_sha256(zc->key, i + 16, key);
+	tb_sha256(zc->iv, 32, iv);
+	tb_aes_key_setup(key, zc->aes_key_ext, 256);
+	memcpy(zc->aes_iv, iv, 16);
+	ret = decrypt_hc(zc);
+
+lbl_exit:
+	return ret;
+}
+
 int main(int argc, char* argv[])
 {
 	zxcfg_t zc;
@@ -1193,10 +1329,10 @@ int main(int argc, char* argv[])
 
 	if(0 == zc.mode)
 		ret = unpack(&zc);
-	else if(1 == zc.mode)
-		ret = pack(&zc, tb_false);
+	else if(zc.mode <= 2)
+		ret = pack(&zc, (tb_bool)(zc.mode - 1));
 	else
-		ret = pack(&zc, tb_true);
+		ret = unpack_hardcode(&zc);
 
 	if(zc.fp_in != NULL)
 		fclose(zc.fp_in);
