@@ -11,7 +11,7 @@
 #include "tb_crc32.h"
 #include "../deps/zlib/zutil.h"
 
-#define ZXCFG_VER	"1.1"
+#define ZXCFG_VER	"1.2"
 
 #define DEF_KEY		"PON_Dkey"
 #define DEF_IV		"PON_DIV"
@@ -25,6 +25,8 @@
 #define CFG_MODEL_MAGIC		0x04030201
 #define XML_HDR_MAGIC		0x01020304	// Big-Endian
 #define SPLIT_BLK_SIZE		0x10000
+#define MAX_PARAMTAG_FSIZE	10240		// max paramtag file size
+#define PARAMTAGHDR			"TAGH"		// paramtag file header
 
 // /etc/hardcode
 #define HC_KEY	"09a01cee5518b341f40d83f1cc5e7c2ac3631ee2fd87c3b85b6b586194cc5486F70xx_5p4"
@@ -109,6 +111,7 @@ typedef struct
 {
 	const char* file_in;
 	const char* file_out;
+	const char* file_paramtag;
 	const char* key_arg;			// hardcode key
 	FILE* fp_in;
 	char key[36];
@@ -125,11 +128,15 @@ typedef struct
 	tb_bool iv_input;				// specify iv manually
 } zxcfg_t;
 
+typedef struct
+{
+	char keys[2][36];
+	tb_int32 count;
+	tb_int32 idx;
+} keyset_t;
+
 void usage(const char* app)
 {
-	fprintf(stderr, "Author: yuleniwo\n");
-	fprintf(stderr, "SourceCode: https://github.com/yuleniwo/zxcfg\n");
-	fprintf(stderr, "Version: %s\n\n", ZXCFG_VER);
 	fprintf(stderr, "Usage: %s [OPTIONS]\n"
 		"Options:\n"
 		"  -i  input file name\n"
@@ -155,7 +162,21 @@ void usage(const char* app)
 		"      1 --- little endian\n"
 		"  -c  cfg type (only used to pack into cfg. default: 2)\n"
 		"  -d  defcfg type (only used to pack into cfg. default: 0)\n"
+		"  -p  specify the paramtag file(Used only to unpack files)\n"
+		"  -h  show this help message\n"
 		"\n", app);
+	fprintf(stderr, "Unpacking example:\n");
+	fprintf(stderr, "  %s -i ctce8_F663N.cfg -o f663n.txt\n", app);
+	fprintf(stderr, "  %s -i ctce8_ZXHN_F650(GPON_ONU).cfg -o f650.txt\n", app);
+	fprintf(stderr, "  %s -i ctce8_F7610M.cfg -o f7610m.txt -k D245264C8493b272360e\n", app);
+	fprintf(stderr, "  %s -i g7615.xml -o g7615.txt -p paramtag_g7615\n", app);
+	fprintf(stderr, "  %s -i db_default_cfg.xml -o default.txt\n", app);
+	fprintf(stderr, "\nPacking example:\n");
+	fprintf(stderr, "  %s -i f663n.txt -o f663n.cfg -m 2 -t 0 -n F663N\n", app);
+	fprintf(stderr, "  %s -i f650.txt -o f650.cfg -m 2 -t 2 -n \"ZXHN F650(GPON ONU)\" -l 1\n", app);
+	fprintf(stderr, "  %s -i f7610m.txt -o f7610m.cfg -m 2 -t 2 -n F7610M -l 1 -k D245264C8493b272360e\n", app);
+	fprintf(stderr, "  %s -i g7615.txt -o g7615_pack.xml -m 1 -t 2\n", app);
+	fprintf(stderr, "  %s -i default.txt -o default_pack.xml -m 1 -t 1\n", app);
 }
 
 // is little endian
@@ -187,7 +208,7 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 	int i, ret = -1;
 	tb_bool m = tb_false;
 
-	if(argc <= 1)
+	if(argc <= 1 || strcmp(argv[1], "-h") == 0)
 	{
 		usage(argv[0]);
 		goto lbl_exit;
@@ -261,6 +282,10 @@ int proc_args(zxcfg_t* zc, int argc, char* argv[])
 
 		case 'd':
 			zc->defcfgtype = (tb_uint16)atoi(argv[++i]);
+			break;
+
+		case 'p':
+			zc->file_paramtag = argv[++i];
 			break;
 		}
 	}
@@ -354,6 +379,17 @@ void gen_key_iv(zxcfg_t* zc, tb_uint32 ver)
 	memcpy(zc->aes_iv, iv, 16);
 }
 
+void update_key(zxcfg_t* zc, const char* newkey)
+{
+	tb_uint8 key[32], m5[16];
+	char chs[32];
+
+	tb_md5(newkey, 33, m5);
+	bin2hex(m5, 16, chs, 0);
+	tb_sha256(chs, 31, key);
+	tb_aes_key_setup(key, zc->aes_key_ext, 256);
+}
+
 tb_int32 decrypt_xml(zxcfg_t* zc, FILE* fpr, const char* tmpfile, FILE** fpout)
 {
 	FILE* fpw = NULL;
@@ -424,8 +460,8 @@ tb_int32 decrypt_xml(zxcfg_t* zc, FILE* fpr, const char* tmpfile, FILE** fpout)
 		else
 		{
 lbl_err_msg:
-			fprintf(stderr, "Decrypt error!\nPlease use the \"-k\" option and "
-				"try a different key.\n");
+			ret = -2; // decrypt error
+			fprintf(stderr, "Decrypt error!\n");
 			goto lbl_exit;
 		}
 	} while(ebh.have_next_blk != 0);
@@ -468,12 +504,15 @@ tb_int32 uncompress_data(const void* in, tb_uint32 in_len,
 		int err = inflate(&zs, Z_FINISH);
 		if(Z_STREAM_END == err)
 		{
-			*out_len -= zs.avail_out;
+			*out_len = zs.total_out;
 			inflateEnd(&zs);
 			ret = 0;
 		}
 		else
+		{
+			fprintf(stderr, "inflate ret: %d, msg: %s\n", err, zs.msg);
 			inflateEnd(&zs);
+		}
 	}
 
 	return ret;
@@ -496,7 +535,7 @@ tb_int32 compress_data(const void* in, tb_uint32 in_len,
 		int err = deflate(&zs, Z_FINISH);
 		if(Z_STREAM_END == err)
 		{
-			*out_len -= zs.avail_out;
+			*out_len = zs.total_out;
 			deflateEnd(&zs);
 			ret = 0;
 		}
@@ -669,6 +708,141 @@ lbl_exit:
 	return ret;
 }
 
+static tb_int32 get_key_from_paramtag(zxcfg_t* zc, keyset_t* ks)
+{
+#define ID_INDIVKEY	1824
+#define ID_GPONSN	2177
+#define ID_PONMAC	32769
+#define ID_MAC1		256
+
+	typedef struct
+	{
+		tb_uint16 id;
+		tb_uint16 len;
+		tb_uint8* val;
+	} tag_t;
+
+	FILE* fp = NULL;
+	tb_uint8 *mem = NULL, *p, *endp;
+	tag_t indivkey = {ID_INDIVKEY}, gponsn = {ID_GPONSN};
+	tag_t ponmac = {ID_PONMAC}, mac1 = {ID_MAC1};
+	tag_t *pts[] = {&indivkey, &gponsn, &ponmac, &mac1};
+	char mac1_str[16] = "00d0d0000001";	// 00:d0:d0:00:00:01
+	char ponmac_str[16];
+	tb_uint32 fsize;
+	tb_uint16 id, len;
+	tb_int32 i, ret = -1;
+	tb_bool le;
+
+	fp = fopen(zc->file_paramtag, "rb");
+	if(NULL == fp)
+	{
+		printf("Can not open file: %s\n", zc->file_paramtag);
+		goto lbl_exit;
+	}
+
+	fseek(fp, 0, SEEK_END);
+	fsize = ftell(fp);
+	fseek(fp, 0, SEEK_SET);
+	if(fsize > MAX_PARAMTAG_FSIZE)
+	{
+		fprintf(stderr, "The paramtag file is too large!\n");
+		goto lbl_exit;
+	}
+
+	mem = (tb_uint8 *)malloc(fsize);
+	if(NULL == mem)
+	{
+		fprintf(stderr, "Alloc memory failed! size: %u\n", fsize);
+		goto lbl_exit;
+	}
+
+	fread(mem, fsize, 1, fp);
+
+	if(memcmp(mem, PARAMTAGHDR, sizeof(PARAMTAGHDR) - 1) != 0)
+	{
+		printf("Invalid paramtag file header!\n");
+		goto lbl_exit;
+	}
+
+	p = mem + 20;
+	endp = mem + fsize;
+
+	if(p + 8 > endp || p[4] == p[5] || (p[4] != 0 && p[5] != 0))
+	{
+		printf("Invalid paramtag file!\n");
+		goto lbl_exit;
+	}
+
+	le = p[4] > 0;
+	do
+	{
+		if(le)
+		{
+			id = (p[1] << 8) | p[0];
+			len = (p[5] << 8) | p[4];
+		}
+		else
+		{
+			id = (p[0] << 8) | p[1];
+			len = (p[4] << 8) | p[5];
+		}
+
+		for(i=0; i<sizeof(pts)/sizeof(pts[0]); i++)
+		{
+			if(pts[i]->id == id && NULL == pts[i]->val)
+			{
+				pts[i]->val = p + 6;
+				pts[i]->len = len;
+			}
+		}
+
+		p += (9U + len) & ~3U;
+	} while(p + 8 <= endp);
+
+	memset(zc->key, 0, sizeof(zc->key));
+	if(NULL == indivkey.val)
+	{
+		tb_int32 idx = 0;
+
+		if(mac1.val != NULL)
+			bin2hex(mac1.val, 6, mac1_str, tb_false);
+
+		sprintf(zc->key, "00000001%s", mac1_str);
+
+		if(gponsn.val != NULL)
+		{
+			len = (tb_uint16)min(gponsn.len, 20);
+			memset(ks->keys[idx], 0, sizeof(ks->keys[idx]));
+			memcpy(ks->keys[idx], gponsn.val, len);
+			memcpy(&ks->keys[idx++][len], mac1_str, 13);
+		}
+
+		if(ponmac.val != NULL)
+		{
+			bin2hex(ponmac.val, 6, ponmac_str, tb_false);
+			memset(ks->keys[idx], 0, sizeof(ks->keys[idx]));
+			memcpy(ks->keys[idx], ponmac_str, 12);
+			memcpy(&ks->keys[idx++][12], mac1_str, 13);
+		}
+
+		ks->count = idx;
+	}
+	else
+		memcpy(zc->key, indivkey.val, min(indivkey.len, 32));
+
+	zc->key_method = 1;
+	zc->key_arg = zc->key;
+	ret = 0;
+
+lbl_exit:
+	if(fp != NULL)
+		fclose(fp);
+
+	free(mem);
+	return ret;
+}
+
 tb_int32 unpack_xml(zxcfg_t* zc)
 {
 	union{
@@ -678,7 +852,8 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 	
 	char tmpname[FILENAME_MAX];
 	FILE* fptmp = NULL;
-	tb_uint32 ver;
+	keyset_t ks;
+	tb_uint32 ver, fpos = 0;
 	tb_int32 ret = -1;
 
 	if(fread(&xh, 1, sizeof(xh), zc->fp_in) != sizeof(xh))
@@ -735,12 +910,23 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 	//case 4: // decrypt with user key & uncompress
 	default:
 		snprintf(tmpname, FILENAME_MAX - 1, "%s.dec", zc->file_out);
+		ks.count = 0;
+		ks.idx = 0;
+		if(4 == ver && zc->file_paramtag != NULL)
+		{
+			ret = get_key_from_paramtag(zc, &ks);
+			if(ret != 0)
+				goto lbl_exit;
+		}
+
 		gen_key_iv(zc, ver);
 		printf("Use key: %s\n", zc->key);
 		printf("Use iv: %s\n", zc->iv);
 		printf("Generate key method: %s\n", 
 			zc->key_method ? "md5, sha256" : "sha256");
+		fpos = ftell(zc->fp_in);
 
+lbl_retry:
 		ret = decrypt_xml(zc, zc->fp_in, tmpname, &fptmp);
 		if(0 == ret)
 		{
@@ -753,6 +939,20 @@ tb_int32 unpack_xml(zxcfg_t* zc)
 				ret = uncompress_xml(zc, fptmp, &xh.cfh);
 			fclose(fptmp);
 			unlink(tmpname);
+		}
+		else if(-2 == ret) // decrypt error
+		{
+			if(ks.idx < ks.count)
+			{
+				printf("Use key: %s\n", ks.keys[ks.idx]);
+				update_key(zc, ks.keys[ks.idx]);
+				ks.idx++;
+				fseek(zc->fp_in, fpos, SEEK_SET);
+				goto lbl_retry;
+			}
+			else
+				fprintf(stderr, "Please use the \"-k\" option and "
+					"try a different key.\n");
 		}
 		break;
 	}
@@ -824,7 +1024,12 @@ tb_int32 unpack(zxcfg_t* zc)
 		}
 
 		if(is_le() != zc->bo_le)
+		{
+			ht.icfgtype = h2ns(ht.icfgtype);
+			ht.idefcfgtype = h2ns(ht.idefcfgtype);
+			ht.x80 = h2nl(ht.x80);
 			ht.file_size = h2nl(ht.file_size);
+		}
 
 		fseek(zc->fp_in, 0, SEEK_END);
 		if((tb_uint32)ftell(zc->fp_in) - 128 != ht.file_size)
@@ -859,12 +1064,9 @@ tb_int32 unpack(zxcfg_t* zc)
 		printf("Cfg header info:\n");
 		printf("  Byte-order: %u(%s)\n", zc->bo_le, 
 			zc->bo_le ? "Little-Endian" : "Big-Endian");
-		if(is_le() == zc->bo_le)
-			printf("  icfgtype: %u\n  idefcfgtype: %u\n", 
+
+		printf("  icfgtype: %u\n  idefcfgtype: %u\n",
 			ht.icfgtype, ht.idefcfgtype);
-		else
-			printf("  icfgtype: %u\n  idefcfgtype: %u\n", 
-			h2nl(ht.icfgtype), h2nl(ht.idefcfgtype));
 		printf("  Model name: %s\n", p);
 	}
 	else
@@ -1035,7 +1237,7 @@ tb_int32 encrypt_xml(zxcfg_t* zc, FILE* fpr, FILE* fpw, tb_uint32 dbver)
 		ebh->plain_len = h2nl(rl);
 		if(rl % TB_AES_BLOCK_SIZE != 0)
 		{
-			ol = TB_ALIGN(rl, TB_AES_BLOCK_SIZE);
+			ol = (tb_uint32)TB_ALIGN(rl, TB_AES_BLOCK_SIZE);
 			while(rl < ol)
 				pi[rl++] = 0;
 		}
@@ -1318,6 +1520,10 @@ int main(int argc, char* argv[])
 {
 	zxcfg_t zc;
 	tb_int32 ret;
+
+	fprintf(stderr, "Author: yuleniwo\n");
+	fprintf(stderr, "SourceCode: https://github.com/yuleniwo/zxcfg\n");
+	fprintf(stderr, "Version: %s\n\n", ZXCFG_VER);
 
 	memset(&zc, 0, sizeof(zc));
 	zc.cfgtype = CFG_HDR_CFGTYPE;
