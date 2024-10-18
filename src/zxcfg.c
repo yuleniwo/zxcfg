@@ -647,6 +647,7 @@ tb_int32 cp_content(zxcfg_t* zc, FILE* fpr, const char* tmpfile, FILE** fpout)
 	tb_uint8 *pi = NULL;
 	tb_uint32 rl;
 	tb_int32 ret = -1;
+	(void)zc; // unused
 
 	fpw = fopen(tmpfile, "wb+");
 	if(NULL == fpw)
@@ -724,14 +725,15 @@ static tb_int32 get_key_from_paramtag(zxcfg_t* zc, keyset_t* ks)
 
 	FILE* fp = NULL;
 	tb_uint8 *mem = NULL, *p, *endp;
-	tag_t indivkey = {ID_INDIVKEY}, gponsn = {ID_GPONSN};
-	tag_t ponmac = {ID_PONMAC}, mac1 = {ID_MAC1};
+	tag_t indivkey = {ID_INDIVKEY, 0, NULL}, gponsn = {ID_GPONSN, 0, NULL};
+	tag_t ponmac = {ID_PONMAC, 0, NULL}, mac1 = {ID_MAC1, 0, NULL};
 	tag_t *pts[] = {&indivkey, &gponsn, &ponmac, &mac1};
 	char mac1_str[16] = "00d0d0000001";	// 00:d0:d0:00:00:01
 	char ponmac_str[16];
 	tb_uint32 fsize;
 	tb_uint16 id, len;
-	tb_int32 i, ret = -1;
+	tb_uint32 i;
+	tb_int32 ret = -1;
 	tb_bool le;
 
 	fp = fopen(zc->file_paramtag, "rb");
