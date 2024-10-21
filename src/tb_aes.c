@@ -936,11 +936,11 @@ tb_int32 TB_API tb_aes_encrypt_cbc_mac(const tb_byte *in, size_t in_len,
 	tb_byte *out, const tb_uint32 *key, tb_int32 keysize, const tb_byte *iv)
 {
 	tb_byte buf_in[TB_AES_BLOCK_SIZE];
-	tb_byte buf_out[TB_AES_BLOCK_SIZE];
+	tb_byte buf_out[TB_AES_BLOCK_SIZE] = {0};
 	tb_byte iv_buf[TB_AES_BLOCK_SIZE];
 	tb_int32 blocks, idx;
 
-	if (in_len % TB_AES_BLOCK_SIZE != 0)
+	if (in_len <= 0 || in_len % TB_AES_BLOCK_SIZE != 0)
 		return TB_ERR_INVAL;
 
 	blocks = (tb_int32)(in_len / TB_AES_BLOCK_SIZE);
