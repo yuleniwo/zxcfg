@@ -10,7 +10,12 @@ endif
 
 TOP_DIR		:= $(PWD)
 CFLAGS		:= -D NDEBUG -Wall -O2 -Wno-unused -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+ifeq ($(shell $(CC) -E -xc -include unistd.h -o /dev/null /dev/null 2>&1),)
+CFLAGS		+= -D HAVE_UNISTD_H
+endif
+ifeq ($(shell $(CC) -v 2>&1 | grep -c "clang version"), 0)
 LDFLAGS		:= -static-libgcc
+endif
 OBJ_DIR	:= $(TOP_DIR)/$(CC)_obj
 BIN_DIR	:= $(TOP_DIR)/$(CC)_bin
 
