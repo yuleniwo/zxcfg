@@ -9,7 +9,7 @@ $(error C compiler does not exist!)
 endif
 
 TOP_DIR		:= $(PWD)
-CFLAGS		:= -D NDEBUG -Wall -O2 -Wno-unused -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+CFLAGS		:= -std=c18 -D NDEBUG -Wall -Wextra -pedantic -Wno-invalid-utf8 -Werror -O3 -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 ifeq ($(shell $(CC) -E -xc -include unistd.h -o /dev/null /dev/null 2>&1),)
 CFLAGS		+= -D HAVE_UNISTD_H
 endif
