@@ -2,20 +2,22 @@
 
 CC			:= cc
 LD			:= $(CC)
-WOLF_SSL	:= 0
 
 ifeq ($(shell which $(CC)),)
 $(error C compiler does not exist!) 
 endif
 
 TOP_DIR		:= $(PWD)
-CFLAGS		:= -std=c18 -D NDEBUG -Wall -Wextra -pedantic -Wno-invalid-utf8 -Werror -O3 -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+CFLAGS		:= -D NDEBUG -Wall -Wextra -Wno-invalid-utf8 -Wno-unused -O2 -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+
 ifeq ($(shell $(CC) -E -xc -include unistd.h -o /dev/null /dev/null 2>&1),)
 CFLAGS		+= -D HAVE_UNISTD_H
 endif
-ifeq ($(shell $(CC) -v 2>&1 | grep -c "clang version"), 0)
+
+ifneq ($(shell $(CC) -v 2>&1 | grep -i -c "mingw"), 0)
 LDFLAGS		:= -static-libgcc
 endif
+
 OBJ_DIR	:= $(TOP_DIR)/$(CC)_obj
 BIN_DIR	:= $(TOP_DIR)/$(CC)_bin
 
